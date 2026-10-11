@@ -26,6 +26,8 @@ import org.flowable.cmmn.engine.impl.process.ProcessInstanceService;
 import org.flowable.cmmn.engine.impl.repository.CaseDefinitionUtil;
 import org.flowable.cmmn.engine.impl.util.CommandContextUtil;
 import org.flowable.cmmn.engine.impl.util.EntityLinkUtil;
+import org.flowable.cmmn.engine.interceptor.ChildInstanceOutParametersContext;
+import org.flowable.cmmn.engine.interceptor.CmmnChildInstanceParametersInterceptor;
 import org.flowable.cmmn.model.IOParameter;
 import org.flowable.cmmn.model.PlanItemTransition;
 import org.flowable.cmmn.model.Process;
@@ -57,7 +59,8 @@ public class ProcessTaskActivityBehavior extends ChildTaskActivityBehavior imple
     protected ProcessTask processTask;
 
     public ProcessTaskActivityBehavior(Process process, Expression processRefExpression, ProcessTask processTask) {
-        super(processTask.isBlocking(), processTask.getBlockingExpression(), processTask.getInParameters(), processTask.getOutParameters());
+        super(processTask.isBlocking(), processTask.getBlockingExpression(), processTask.getInParameters(), processTask.getOutParameters(),
+                processTask.isInheritVariables());
         this.process = process;
         this.processRefExpression = processRefExpression;
         this.processRef = processTask.getProcessRef();
@@ -87,7 +90,9 @@ public class ProcessTaskActivityBehavior extends ChildTaskActivityBehavior imple
         }
 
         Map<String, Object> inParametersMap = new HashMap<>();
-        handleInParameters(planItemInstanceEntity, cmmnEngineConfiguration, inParametersMap, cmmnEngineConfiguration.getExpressionManager());
+        Map<String, Object> transientVariablesMap = new HashMap<>();
+        handleInParameters(planItemInstanceEntity, cmmnEngineConfiguration, inParametersMap, transientVariablesMap, cmmnEngineConfiguration.getExpressionManager());
+        afterInParameters(cmmnEngineConfiguration, planItemInstanceEntity, processTask, inParametersMap, transientVariablesMap);
 
         FormInfo variableFormInfo = null;
         Map<String, Object> variableFormVariables = null;
@@ -135,7 +140,7 @@ public class ProcessTaskActivityBehavior extends ChildTaskActivityBehavior imple
 
             try {
                 processInstanceService.startProcessInstance(processDefinitionId, processInstanceId, planItemInstanceEntity.getId(), planItemInstanceEntity.getStageInstanceId(),
-                        planItemInstanceEntity.getTenantId(), inParametersMap, businessKey, variableFormVariables, variableFormInfo, variableFormOutcome);
+                        planItemInstanceEntity.getTenantId(), inParametersMap, transientVariablesMap, businessKey, variableFormVariables, variableFormInfo, variableFormOutcome);
             } catch (BusinessError businessError) {
                 // An uncaught BusinessError from the child BPMN process propagates as a fault on this plan item.
                 // Clean up the orphaned child process instance (consistent with BPMN ErrorPropagation.executeCatch
@@ -149,7 +154,7 @@ public class ProcessTaskActivityBehavior extends ChildTaskActivityBehavior imple
 
         } else {
             processInstanceService.startProcessInstance(processDefinitionId, processInstanceId, planItemInstanceEntity.getStageInstanceId(),
-                    planItemInstanceEntity.getTenantId(), inParametersMap, businessKey, variableFormVariables, variableFormInfo, variableFormOutcome);
+                    planItemInstanceEntity.getTenantId(), inParametersMap, transientVariablesMap, businessKey, variableFormVariables, variableFormInfo, variableFormOutcome);
         }
 
         if (!blocking) {
@@ -221,9 +226,21 @@ public class ProcessTaskActivityBehavior extends ChildTaskActivityBehavior imple
                                        CaseInstanceEntity caseInstance,
                                        ProcessInstanceService processInstanceService) {
 
-        if (outParameters == null) {
-            return;
+        if (outParameters != null) {
+            processOutParameters(planItemInstance, caseInstance, processInstanceService);
         }
+
+        CmmnChildInstanceParametersInterceptor childInstanceParametersInterceptor = CommandContextUtil.getCmmnEngineConfiguration()
+                .getChildInstanceParametersInterceptor();
+        if (childInstanceParametersInterceptor != null) {
+            childInstanceParametersInterceptor.afterOutParameters(new ChildInstanceOutParametersContext(planItemInstance, processTask,
+                    processInstanceService.getVariableContainer(planItemInstance.getReferenceId())));
+        }
+    }
+
+    protected void processOutParameters(DelegatePlanItemInstance planItemInstance,
+                                        CaseInstanceEntity caseInstance,
+                                        ProcessInstanceService processInstanceService) {
 
         for (IOParameter outParameter : outParameters) {
 

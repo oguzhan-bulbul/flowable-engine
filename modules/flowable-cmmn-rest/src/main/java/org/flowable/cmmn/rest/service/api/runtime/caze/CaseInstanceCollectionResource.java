@@ -423,8 +423,10 @@ public class CaseInstanceCollectionResource extends BaseCaseInstanceResource {
 
             CaseInstanceResponse caseInstanceResponse = null;
             if (request.getReturnVariables()) {
-                Map<String, Object> runtimeVariableMap = runtimeService.getVariables(instance.getId());
-                caseInstanceResponse = restResponseFactory.createCaseInstanceResponse(instance, true, runtimeVariableMap);
+                // The variable values are resolved when the response is created, so a variable whose value cannot be resolved does not fail the response
+                CaseInstance startedInstance = instance;
+                caseInstanceResponse = cmmnEngineConfiguration.getCommandExecutor().execute(commandContext -> restResponseFactory.createCaseInstanceResponse(
+                        startedInstance, true, runtimeService.getVariableInstances(startedInstance.getId()).values()));
 
             } else {
                 caseInstanceResponse = restResponseFactory.createCaseInstanceResponse(instance);

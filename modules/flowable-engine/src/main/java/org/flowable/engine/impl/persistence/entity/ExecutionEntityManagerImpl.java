@@ -207,6 +207,11 @@ public class ExecutionEntityManagerImpl
     }
 
     @Override
+    public List<ProcessInstance> findProcessInstanceIdsByQueryCriteria(ProcessInstanceQueryImpl executionQuery) {
+        return dataManager.findProcessInstanceIdsByQueryCriteria(executionQuery);
+    }
+
+    @Override
     public Collection<ExecutionEntity> findInactiveExecutionsByProcessInstanceId(final String processInstanceId) {
         return dataManager.findInactiveExecutionsByProcessInstanceId(processInstanceId);
     }
@@ -1114,11 +1119,16 @@ public class ExecutionEntityManagerImpl
     @Override
     public String updateProcessInstanceBusinessStatus(ExecutionEntity executionEntity, String businessStatus) {
         if (executionEntity.isProcessInstanceType() && businessStatus != null) {
+            String oldBusinessStatus = executionEntity.getBusinessStatus();
             executionEntity.setBusinessStatus(businessStatus);
             getHistoryManager().updateProcessBusinessStatusInHistory(executionEntity);
 
-            if (getEventDispatcher() != null && getEventDispatcher().isEnabled()) {
-                getEventDispatcher().dispatchEvent(FlowableEventBuilder.createEntityEvent(FlowableEngineEventType.ENTITY_UPDATED, executionEntity),
+            FlowableEventDispatcher eventDispatcher = getEventDispatcher();
+            if (eventDispatcher != null && eventDispatcher.isEnabled()) {
+                eventDispatcher.dispatchEvent(FlowableEventBuilder.createEntityEvent(FlowableEngineEventType.ENTITY_UPDATED, executionEntity),
+                        engineConfiguration.getEngineCfgKey());
+                eventDispatcher.dispatchEvent(
+                        FlowableEventBuilder.createProcessBusinessStatusUpdatedEvent(executionEntity, oldBusinessStatus, businessStatus),
                         engineConfiguration.getEngineCfgKey());
             }
 

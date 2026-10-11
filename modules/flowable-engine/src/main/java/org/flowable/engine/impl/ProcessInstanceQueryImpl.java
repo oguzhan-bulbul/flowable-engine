@@ -34,6 +34,7 @@ import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.runtime.ProcessInstanceQuery;
 import org.flowable.eventsubscription.service.impl.EventSubscriptionQueryValue;
 import org.flowable.variable.service.impl.AbstractVariableQueryImpl;
+import org.flowable.variable.service.impl.persistence.entity.VariableInitializingList;
 
 /**
  * @author Tom Baeyens
@@ -88,6 +89,7 @@ public class ProcessInstanceQueryImpl extends AbstractVariableQueryImpl<ProcessI
     protected SuspensionState suspensionState;
     protected boolean includeProcessVariables;
     protected Collection<String> variableNamesToInclude;
+    protected boolean excludeVariableInitialization;
     protected boolean withJobException;
     protected String name;
     protected String nameLike;
@@ -108,6 +110,7 @@ public class ProcessInstanceQueryImpl extends AbstractVariableQueryImpl<ProcessI
     protected String referenceType;
     protected String locale;
     protected boolean withLocalizationFallback;
+    protected boolean returnIdsOnly;
 
     protected String tenantId;
     protected String tenantIdLike;
@@ -667,6 +670,20 @@ public class ProcessInstanceQueryImpl extends AbstractVariableQueryImpl<ProcessI
     }
 
     @Override
+    public ProcessInstanceQuery includeProcessVariables(boolean excludeVariableInitialization) {
+        includeProcessVariables();
+        this.excludeVariableInitialization = excludeVariableInitialization;
+        return this;
+    }
+
+    @Override
+    public ProcessInstanceQuery includeProcessVariables(Collection<String> variableNames, boolean excludeVariableInitialization) {
+        includeProcessVariables(variableNames);
+        this.excludeVariableInitialization = excludeVariableInitialization;
+        return this;
+    }
+
+    @Override
     public ProcessInstanceQuery withJobException() {
         this.withJobException = true;
         return this;
@@ -1001,6 +1018,12 @@ public class ProcessInstanceQueryImpl extends AbstractVariableQueryImpl<ProcessI
     }
 
     @Override
+    public ProcessInstanceQuery returnIdsOnly() {
+        this.returnIdsOnly = true;
+        return this;
+    }
+
+    @Override
     public ProcessInstanceQuery startedBefore(Date beforeTime) {
         if (inOrStatement) {
             this.currentOrQueryObject.startedBefore = beforeTime;
@@ -1081,13 +1104,18 @@ public class ProcessInstanceQueryImpl extends AbstractVariableQueryImpl<ProcessI
             processEngineConfiguration.getProcessInstanceQueryInterceptor().beforeProcessInstanceQueryExecute(this);
         }
         
-        if (includeProcessVariables) {
-            processInstances = processEngineConfiguration.getExecutionEntityManager().findProcessInstanceAndVariablesByQueryCriteria(this);
+        if (returnIdsOnly) {
+            processInstances = processEngineConfiguration.getExecutionEntityManager().findProcessInstanceIdsByQueryCriteria(this);
+        } else if (includeProcessVariables) {
+            processInstances = VariableInitializingList.executeQueryIncludingVariables(commandContext, excludeVariableInitialization,
+                    () -> processEngineConfiguration.getExecutionEntityManager().findProcessInstanceAndVariablesByQueryCriteria(this));
         } else {
             processInstances = processEngineConfiguration.getExecutionEntityManager().findProcessInstanceByQueryCriteria(this);
         }
 
-        if (processEngineConfiguration.getPerformanceSettings().isEnableLocalization() && processEngineConfiguration.getInternalProcessLocalizationManager() != null) {
+        // Id only results have no name or description to localize
+        if (!returnIdsOnly && processEngineConfiguration.getPerformanceSettings().isEnableLocalization()
+                && processEngineConfiguration.getInternalProcessLocalizationManager() != null) {
             for (ProcessInstance processInstance : processInstances) {
                 processEngineConfiguration.getInternalProcessLocalizationManager().localize(processInstance, locale, withLocalizationFallback);
             }
@@ -1350,6 +1378,10 @@ public class ProcessInstanceQueryImpl extends AbstractVariableQueryImpl<ProcessI
 
     public Collection<String> getVariableNamesToInclude() {
         return variableNamesToInclude;
+    }
+
+    public boolean isExcludeVariableInitialization() {
+        return excludeVariableInitialization;
     }
 
     public boolean iswithException() {

@@ -25,12 +25,15 @@ import org.flowable.cmmn.engine.impl.persistence.entity.CaseInstanceEntityManage
 import org.flowable.cmmn.engine.impl.persistence.entity.PlanItemInstanceEntity;
 import org.flowable.cmmn.engine.impl.util.CommandContextUtil;
 import org.flowable.cmmn.engine.impl.util.IOParameterUtil;
+import org.flowable.cmmn.engine.interceptor.ChildInstanceInParametersContext;
+import org.flowable.cmmn.engine.interceptor.CmmnChildInstanceParametersInterceptor;
 import org.flowable.cmmn.model.ChildTask;
 import org.flowable.cmmn.model.IOParameter;
 import org.flowable.common.engine.api.FlowableIllegalStateException;
 import org.flowable.common.engine.api.delegate.Expression;
 import org.flowable.common.engine.impl.el.ExpressionManager;
 import org.flowable.common.engine.impl.interceptor.CommandContext;
+import org.flowable.common.engine.impl.util.JsonUtil;
 import org.flowable.form.api.FormInfo;
 
 /**
@@ -43,6 +46,7 @@ public abstract class ChildTaskActivityBehavior extends CoreCmmnTriggerableActiv
     protected String isBlockingExpression;
     protected List<IOParameter> inParameters;
     protected List<IOParameter> outParameters;
+    protected boolean inheritVariables;
 
     public ChildTaskActivityBehavior(boolean isBlocking, String isBlockingExpression) {
         this.isBlocking = isBlocking;
@@ -50,9 +54,15 @@ public abstract class ChildTaskActivityBehavior extends CoreCmmnTriggerableActiv
     }
 
     public ChildTaskActivityBehavior(boolean isBlocking, String isBlockingExpression, List<IOParameter> inParameters, List<IOParameter> outParameters) {
+        this(isBlocking, isBlockingExpression, inParameters, outParameters, false);
+    }
+
+    public ChildTaskActivityBehavior(boolean isBlocking, String isBlockingExpression, List<IOParameter> inParameters, List<IOParameter> outParameters,
+            boolean inheritVariables) {
         this(isBlocking, isBlockingExpression);
         this.inParameters = inParameters;
         this.outParameters = outParameters;
+        this.inheritVariables = inheritVariables;
     }
 
     @Override
@@ -79,9 +89,40 @@ public abstract class ChildTaskActivityBehavior extends CoreCmmnTriggerableActiv
         CommandContextUtil.getAgenda(commandContext).planCompletePlanItemInstanceOperation(planItemInstance);
     }
 
+    /**
+     * Hands the start variables of the child instance to the {@link CmmnChildInstanceParametersInterceptor}, after the in
+     * parameters were evaluated into them.
+     */
+    protected void afterInParameters(CmmnEngineConfiguration cmmnEngineConfiguration, PlanItemInstanceEntity planItemInstanceEntity,
+            ChildTask childTask, Map<String, Object> variables, Map<String, Object> transientVariables) {
+
+        CmmnChildInstanceParametersInterceptor childInstanceParametersInterceptor = cmmnEngineConfiguration.getChildInstanceParametersInterceptor();
+        if (childInstanceParametersInterceptor != null) {
+            childInstanceParametersInterceptor.afterInParameters(new ChildInstanceInParametersContext(planItemInstanceEntity, childTask,
+                    variables, transientVariables));
+        }
+    }
+
     protected void handleInParameters(PlanItemInstanceEntity planItemInstanceEntity,
                                       CmmnEngineConfiguration cmmnEngineConfiguration, Map<String, Object> inParametersMap,
-                                      ExpressionManager expressionManager) {
+                                      Map<String, Object> transientVariablesMap, ExpressionManager expressionManager) {
+
+        if (inheritVariables) {
+            // Inherit all variables from the parent. Explicit in parameters are
+            // applied afterwards, so they take precedence over the inherited persistent variables.
+            // Transient variables are kept transient in the child so they are not persisted
+            // JSON variables are deep copied so the parent and child don't share the same instance
+            Map<String, Object> transientVariables = planItemInstanceEntity.getTransientVariables();
+            for (Map.Entry<String, Object> entry : planItemInstanceEntity.getVariables().entrySet()) {
+                String variableName = entry.getKey();
+                Object variableValue = JsonUtil.deepCopyIfJson(entry.getValue());
+                if (transientVariables.containsKey(variableName)) {
+                    transientVariablesMap.put(variableName, variableValue);
+                } else {
+                    inParametersMap.put(variableName, variableValue);
+                }
+            }
+        }
 
         IOParameterUtil.processInParameters(inParameters, planItemInstanceEntity, inParametersMap, expressionManager);
     }

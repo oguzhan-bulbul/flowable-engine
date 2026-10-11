@@ -24,6 +24,7 @@ import org.flowable.cmmn.engine.impl.process.ProcessInstanceService;
 import org.flowable.cmmn.model.IOParameter;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.common.engine.api.delegate.Expression;
+import org.flowable.common.engine.api.variable.VariableContainer;
 import org.flowable.engine.impl.cfg.ProcessEngineConfigurationImpl;
 import org.flowable.common.engine.api.delegate.BusinessError;
 import org.flowable.engine.impl.cmd.HandleCaseTaskErrorCmd;
@@ -60,16 +61,16 @@ public class DefaultProcessInstanceService implements ProcessInstanceService {
 
     @Override
     public String startProcessInstance(String processDefinitionId, String predefinedProcessInstanceId, String stageInstanceId,
-            String tenantId, Map<String, Object> inParametersMap, String businessKey,
+            String tenantId, Map<String, Object> inParametersMap, Map<String, Object> transientVariablesMap, String businessKey,
             Map<String, Object> variableFormVariables, FormInfo variableFormInfo, String variableFormOutcome) {
 
         return startProcessInstance(processDefinitionId, predefinedProcessInstanceId, null, stageInstanceId, tenantId,
-                inParametersMap, businessKey, variableFormVariables, variableFormInfo, variableFormOutcome);
+                inParametersMap, transientVariablesMap, businessKey, variableFormVariables, variableFormInfo, variableFormOutcome);
     }
 
     @Override
     public String startProcessInstance(String processDefinitionId, String predefinedProcessInstanceId, String planItemInstanceId, String stageInstanceId,
-            String tenantId, Map<String, Object> inParametersMap, String businessKey,
+            String tenantId, Map<String, Object> inParametersMap, Map<String, Object> transientVariablesMap, String businessKey,
             Map<String, Object> variableFormVariables, FormInfo variableFormInfo, String variableFormOutcome) {
 
         ProcessInstanceBuilder processInstanceBuilder = processEngineConfiguration.getRuntimeService().createProcessInstanceBuilder();
@@ -89,6 +90,10 @@ public class DefaultProcessInstanceService implements ProcessInstanceService {
 
         for (String target : inParametersMap.keySet()) {
             processInstanceBuilder.variable(target, inParametersMap.get(target));
+        }
+
+        if (transientVariablesMap != null && !transientVariablesMap.isEmpty()) {
+            processInstanceBuilder.transientVariables(transientVariablesMap);
         }
 
         if (businessKey != null) {
@@ -111,6 +116,11 @@ public class DefaultProcessInstanceService implements ProcessInstanceService {
     @Override
     public void triggerCaseTask(String executionId, Map<String, Object> variables) {
         processEngineConfiguration.getCommandExecutor().execute(new TriggerCaseTaskCmd(executionId, variables));
+    }
+
+    @Override
+    public void triggerCaseTask(String executionId, Map<String, Object> variables, VariableContainer childCaseInstance) {
+        processEngineConfiguration.getCommandExecutor().execute(new TriggerCaseTaskCmd(executionId, variables, childCaseInstance));
     }
 
     @Override
@@ -206,6 +216,11 @@ public class DefaultProcessInstanceService implements ProcessInstanceService {
     @Override
     public Map<String, Object> getVariables(String executionId){
        return processEngineConfiguration.getRuntimeService().getVariables(executionId);
+    }
+
+    @Override
+    public VariableContainer getVariableContainer(String executionId) {
+        return processEngineConfiguration.getExecutionEntityManager().findById(executionId);
     }
 
     @Override

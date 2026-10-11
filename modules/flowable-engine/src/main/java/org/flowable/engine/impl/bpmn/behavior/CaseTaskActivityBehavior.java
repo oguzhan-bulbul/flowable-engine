@@ -26,6 +26,7 @@ import org.flowable.common.engine.api.scope.ScopeTypes;
 import org.flowable.common.engine.api.variable.VariableContainer;
 import org.flowable.common.engine.impl.el.ExpressionManager;
 import org.flowable.common.engine.impl.interceptor.CommandContext;
+import org.flowable.common.engine.impl.util.JsonUtil;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.impl.bpmn.helper.ErrorPropagation;
 import org.flowable.engine.impl.cfg.ProcessEngineConfigurationImpl;
@@ -37,6 +38,9 @@ import org.flowable.engine.impl.util.CommandContextUtil;
 import org.flowable.engine.impl.util.EntityLinkUtil;
 import org.flowable.engine.impl.util.IOParameterUtil;
 import org.flowable.engine.impl.util.ProcessDefinitionUtil;
+import org.flowable.engine.interceptor.ChildInstanceInParametersContext;
+import org.flowable.engine.interceptor.ChildInstanceOutParametersContext;
+import org.flowable.engine.interceptor.ChildInstanceParametersInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,9 +90,33 @@ public class CaseTaskActivityBehavior extends AbstractBpmnActivityBehavior imple
         }
         
         Map<String, Object> inParameters = new HashMap<>();
+        Map<String, Object> transientVariables = new HashMap<>();
+
+        if (caseServiceTask.isInheritVariables()) {
+            // Inherit all variables from the parent. Explicit in parameters are
+            // applied afterwards, so they take precedence over the inherited persistent variables.
+            // Transient variables are kept transient in the child so they are not persisted
+            // JSON variables are deep copied so the parent and child don't share the same instance
+            Map<String, Object> executionTransientVariables = execution.getTransientVariables();
+            for (Map.Entry<String, Object> entry : execution.getVariables().entrySet()) {
+                String variableName = entry.getKey();
+                Object variableValue = JsonUtil.deepCopyIfJson(entry.getValue());
+                if (executionTransientVariables.containsKey(variableName)) {
+                    transientVariables.put(variableName, variableValue);
+                } else {
+                    inParameters.put(variableName, variableValue);
+                }
+            }
+        }
 
         // copy process variables
         IOParameterUtil.processInParameters(caseServiceTask.getInParameters(), execution, inParameters::put, inParameters::put, expressionManager);
+
+        ChildInstanceParametersInterceptor childInstanceParametersInterceptor = processEngineConfiguration.getChildInstanceParametersInterceptor();
+        if (childInstanceParametersInterceptor != null) {
+            childInstanceParametersInterceptor.afterInParameters(new ChildInstanceInParametersContext(execution, caseServiceTask, inParameters,
+                    transientVariables));
+        }
 
         String caseInstanceId = caseInstanceService.generateNewCaseInstanceId();
 
@@ -120,7 +148,7 @@ public class CaseTaskActivityBehavior extends AbstractBpmnActivityBehavior imple
 
         try {
             caseInstanceService.startCaseInstance(caseDefinitionId, caseInstanceId,
-                    caseInstanceName, businessKey, execution.getId(), execution.getTenantId(), inParameters);
+                    caseInstanceName, businessKey, execution.getId(), execution.getTenantId(), inParameters, transientVariables);
         } catch (BusinessError businessError) {
             // An uncaught BusinessError from the child CMMN case propagates as a BPMN error.
             // Clean up the orphaned child case instance, then propagate.
@@ -153,16 +181,36 @@ public class CaseTaskActivityBehavior extends AbstractBpmnActivityBehavior imple
     }
     
     public void triggerCaseTaskAndLeave(DelegateExecution execution, Map<String, Object> variables) {
-        triggerCaseTask(execution, variables);
+        triggerCaseTaskAndLeave(execution, variables, null);
+    }
+
+    public void triggerCaseTaskAndLeave(DelegateExecution execution, Map<String, Object> variables, VariableContainer childCaseInstance) {
+        triggerCaseTask(execution, variables, childCaseInstance);
         leave(execution);
     }
 
     public void triggerCaseTask(DelegateExecution execution, Map<String, Object> variables) {
+        triggerCaseTask(execution, variables, null);
+    }
+
+    /**
+     * @param variables the values of the out parameters, already evaluated against the child case instance
+     * @param childCaseInstance the completed child case instance, passed to the {@link ChildInstanceParametersInterceptor};
+     *         the interceptor is not called when it is null
+     */
+    public void triggerCaseTask(DelegateExecution execution, Map<String, Object> variables, VariableContainer childCaseInstance) {
         execution.setVariables(variables);
         ExecutionEntity executionEntity = (ExecutionEntity) execution;
 
         if (executionEntity.isSuspended() || ProcessDefinitionUtil.isProcessDefinitionSuspended(execution.getProcessDefinitionId())) {
             throw new FlowableException("Cannot complete case task. Parent process instance " + executionEntity + " is suspended");
+        }
+
+        ChildInstanceParametersInterceptor childInstanceParametersInterceptor = CommandContextUtil.getProcessEngineConfiguration()
+                .getChildInstanceParametersInterceptor();
+        if (childInstanceParametersInterceptor != null && childCaseInstance != null) {
+            childInstanceParametersInterceptor.afterOutParameters(new ChildInstanceOutParametersContext(execution,
+                    executionEntity.getCurrentFlowElement(), childCaseInstance));
         }
 
         // Set the reference id and type to null since the execution could be reused

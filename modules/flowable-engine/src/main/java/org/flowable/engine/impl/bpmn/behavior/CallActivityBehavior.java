@@ -36,6 +36,7 @@ import org.flowable.common.engine.api.delegate.event.FlowableEventDispatcher;
 import org.flowable.common.engine.api.scope.ScopeTypes;
 import org.flowable.common.engine.impl.el.ExpressionManager;
 import org.flowable.common.engine.impl.interceptor.CommandContext;
+import org.flowable.common.engine.impl.util.JsonUtil;
 import org.flowable.engine.DynamicBpmnConstants;
 import org.flowable.engine.ProcessEngineConfiguration;
 import org.flowable.engine.delegate.DelegateExecution;
@@ -52,6 +53,9 @@ import org.flowable.engine.impl.util.CommandContextUtil;
 import org.flowable.engine.impl.util.EntityLinkUtil;
 import org.flowable.engine.impl.util.IOParameterUtil;
 import org.flowable.engine.impl.util.ProcessDefinitionUtil;
+import org.flowable.engine.interceptor.ChildInstanceInParametersContext;
+import org.flowable.engine.interceptor.ChildInstanceOutParametersContext;
+import org.flowable.engine.interceptor.ChildInstanceParametersInterceptor;
 import org.flowable.engine.interceptor.StartSubProcessInstanceAfterContext;
 import org.flowable.engine.interceptor.StartSubProcessInstanceBeforeContext;
 import org.flowable.engine.repository.ProcessDefinition;
@@ -160,11 +164,13 @@ public class CallActivityBehavior extends AbstractBpmnActivityBehavior implement
                 // The executionVariables contain all variables, including the transient variables.
                 // Hence why that map is iterated and the transient variables are split off
                 String variableName = entry.getKey();
+                // JSON variables are deep copied so the parent and child don't share the same instance
+                Object variableValue = JsonUtil.deepCopyIfJson(entry.getValue());
                 if (transientVariables.containsKey(variableName)) {
-                    instanceBeforeContext.getTransientVariables().put(variableName, entry.getValue());
+                    instanceBeforeContext.getTransientVariables().put(variableName, variableValue);
 
                 } else {
-                    instanceBeforeContext.getVariables().put(variableName, entry.getValue());
+                    instanceBeforeContext.getVariables().put(variableName, variableValue);
 
                 }
             }
@@ -176,6 +182,12 @@ public class CallActivityBehavior extends AbstractBpmnActivityBehavior implement
             Map<String, Object> variables = instanceBeforeContext.getVariables();
             // copy process variables
             IOParameterUtil.processInParameters(inParameters, execution, variables::put, variables::put, expressionManager);
+        }
+
+        ChildInstanceParametersInterceptor childInstanceParametersInterceptor = processEngineConfiguration.getChildInstanceParametersInterceptor();
+        if (childInstanceParametersInterceptor != null) {
+            childInstanceParametersInterceptor.afterInParameters(new ChildInstanceInParametersContext(execution, callActivity,
+                    instanceBeforeContext.getVariables(), instanceBeforeContext.getTransientVariables()));
         }
 
         if (!instanceBeforeContext.getVariables().isEmpty()) {
@@ -252,9 +264,9 @@ public class CallActivityBehavior extends AbstractBpmnActivityBehavior implement
     public void completing(DelegateExecution execution, DelegateExecution subProcessInstance) throws Exception {
         // only data. no control flow available on this execution.
 
-        ExpressionManager expressionManager = CommandContextUtil.getProcessEngineConfiguration().getExpressionManager();
-
         // copy process variables
+        ProcessEngineConfigurationImpl processEngineConfiguration = CommandContextUtil.getProcessEngineConfiguration();
+        ExpressionManager expressionManager = processEngineConfiguration.getExpressionManager();
         ExecutionEntity executionEntity = (ExecutionEntity) execution;
         CallActivity callActivity = (CallActivity) executionEntity.getCurrentFlowElement();
 
@@ -269,6 +281,11 @@ public class CallActivityBehavior extends AbstractBpmnActivityBehavior implement
             };
 
             IOParameterUtil.processOutParameters(outParameters, subProcessInstance, variableConsumer, variableConsumer, expressionManager);
+        }
+
+        ChildInstanceParametersInterceptor childInstanceParametersInterceptor = processEngineConfiguration.getChildInstanceParametersInterceptor();
+        if (childInstanceParametersInterceptor != null) {
+            childInstanceParametersInterceptor.afterOutParameters(new ChildInstanceOutParametersContext(execution, callActivity, subProcessInstance));
         }
     }
 

@@ -218,7 +218,7 @@ public class DefaultCmmnHistoryManager implements CmmnHistoryManager {
 
             HistoricVariableInstanceEntityManager historicVariableInstanceEntityManager = cmmnEngineConfiguration.getVariableServiceConfiguration().getHistoricVariableInstanceEntityManager();
             List<HistoricVariableInstanceEntity> historicVariableInstanceEntities = historicVariableInstanceEntityManager
-                    .findHistoricalVariableInstancesByScopeIdAndScopeType(caseInstanceId, ScopeTypes.CMMN);
+                    .findHistoricalVariableInstancesByScopeIdAndScopeTypes(caseInstanceId, cmmnEngineConfiguration.getDependentScopeTypes());
             for (HistoricVariableInstanceEntity historicVariableInstanceEntity : historicVariableInstanceEntities) {
                 historicVariableInstanceEntityManager.delete(historicVariableInstanceEntity);
             }
@@ -391,6 +391,14 @@ public class DefaultCmmnHistoryManager implements CmmnHistoryManager {
                 historicPlanItemInstanceEntity.setCompletedBy(planItemInstanceEntity.getCompletedBy());
             }
         }
+    }
+
+    @Override
+    public void recordPlanItemInstanceWaitingForRepetition(PlanItemInstanceEntity planItemInstanceEntity) {
+        // Only the state (and lastUpdatedTime) needs to be synced to history; there is no dedicated timestamp for the
+        // 'waiting for repetition' transition of a leftover collection repetition template.
+        recordHistoricPlanItemInstanceEntity(planItemInstanceEntity, cmmnEngineConfiguration.getClock().getCurrentTime(),
+            historicPlanItemInstanceEntity -> { });
     }
 
     @Override

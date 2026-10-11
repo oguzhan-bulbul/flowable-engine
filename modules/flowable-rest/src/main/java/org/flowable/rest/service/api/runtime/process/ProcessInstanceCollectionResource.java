@@ -424,14 +424,20 @@ public class ProcessInstanceCollectionResource extends BaseProcessInstanceResour
 
             ProcessInstanceResponse processInstanceResponse = null;
             if (request.getReturnVariables()) {
-                Map<String, Object> runtimeVariableMap = null;
-                List<HistoricVariableInstance> historicVariableList = null;
-                if (instance.isEnded()) {
-                    historicVariableList = historyService.createHistoricVariableInstanceQuery().processInstanceId(instance.getId()).list();
-                } else {
-                    runtimeVariableMap = runtimeService.getVariables(instance.getId());
-                }
-                processInstanceResponse = restResponseFactory.createProcessInstanceResponse(instance, true, runtimeVariableMap, historicVariableList);
+                // The variable values are resolved when the response is created, so a variable whose value cannot be resolved does not fail the response
+                ProcessInstance startedInstance = instance;
+                processInstanceResponse = managementService.executeCommand(commandContext -> {
+                    if (startedInstance.isEnded()) {
+                        List<HistoricVariableInstance> historicVariableList = historyService.createHistoricVariableInstanceQuery()
+                                .processInstanceId(startedInstance.getId())
+                                .excludeVariableInitialization()
+                                .list();
+                        return restResponseFactory.createProcessInstanceResponse(startedInstance, true, null, historicVariableList);
+                    }
+
+                    return restResponseFactory.createProcessInstanceResponse(startedInstance, true,
+                            runtimeService.getVariableInstances(startedInstance.getId()).values(), null);
+                });
 
             } else {
                 processInstanceResponse = restResponseFactory.createProcessInstanceResponse(instance);

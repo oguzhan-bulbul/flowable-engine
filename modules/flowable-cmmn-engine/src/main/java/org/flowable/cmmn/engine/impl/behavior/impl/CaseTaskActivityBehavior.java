@@ -31,6 +31,8 @@ import org.flowable.cmmn.engine.impl.runtime.CaseInstanceBuilderImpl;
 import org.flowable.cmmn.engine.impl.runtime.CaseInstanceHelper;
 import org.flowable.cmmn.engine.impl.util.CommandContextUtil;
 import org.flowable.cmmn.engine.impl.util.IOParameterUtil;
+import org.flowable.cmmn.engine.interceptor.ChildInstanceOutParametersContext;
+import org.flowable.cmmn.engine.interceptor.CmmnChildInstanceParametersInterceptor;
 import org.flowable.cmmn.model.CaseTask;
 import org.flowable.cmmn.model.PlanItemTransition;
 import org.flowable.common.engine.api.FlowableException;
@@ -57,7 +59,8 @@ public class CaseTaskActivityBehavior extends ChildTaskActivityBehavior implemen
     protected CaseTask caseTask;
 
     public CaseTaskActivityBehavior(Expression caseRefExpression, CaseTask caseTask) {
-        super(caseTask.isBlocking(), caseTask.getBlockingExpression(), caseTask.getInParameters(), caseTask.getOutParameters());
+        super(caseTask.isBlocking(), caseTask.getBlockingExpression(), caseTask.getInParameters(), caseTask.getOutParameters(),
+                caseTask.isInheritVariables());
         this.caseRefExpression = caseRefExpression;
         this.caseRef = caseTask.getCaseRef();
         this.fallbackToDefaultTenant = caseTask.getFallbackToDefaultTenant();
@@ -95,7 +98,9 @@ public class CaseTaskActivityBehavior extends ChildTaskActivityBehavior implemen
         }
 
         Map<String, Object> finalVariableMap = new HashMap<>();
-        handleInParameters(planItemInstanceEntity, cmmnEngineConfiguration, finalVariableMap, cmmnEngineConfiguration.getExpressionManager());
+        Map<String, Object> transientVariablesMap = new HashMap<>();
+        handleInParameters(planItemInstanceEntity, cmmnEngineConfiguration, finalVariableMap, transientVariablesMap, cmmnEngineConfiguration.getExpressionManager());
+        afterInParameters(cmmnEngineConfiguration, planItemInstanceEntity, caseTask, finalVariableMap, transientVariablesMap);
 
         // Needed for the form field handler later
         Map<String, Object> variablesFromFormSubmission = null;
@@ -108,9 +113,17 @@ public class CaseTaskActivityBehavior extends ChildTaskActivityBehavior implemen
                     throw new FlowableIllegalStateException("Form engine is not initialized");
                 }
 
-                variablesFromFormSubmission = formService.getVariablesFromFormSubmission(planItemInstanceEntity.getPlanItemDefinitionId(), "caseTask", 
-                        planItemInstanceEntity.getCaseInstanceId(), planItemInstanceEntity.getCaseDefinitionId(), ScopeTypes.CMMN, 
-                        variableInfo.formInfo, variableInfo.formVariables, variableInfo.formOutcome);
+                variablesFromFormSubmission = formService.createFormSubmissionBuilder()
+                        .elementId(planItemInstanceEntity.getPlanItemDefinitionId())
+                        .elementType("caseTask")
+                        .scopeId(planItemInstanceEntity.getCaseInstanceId())
+                        .scopeDefinitionId(planItemInstanceEntity.getCaseDefinitionId())
+                        .subScopeId(planItemInstanceEntity.getId())
+                        .scopeType(ScopeTypes.CMMN)
+                        .formInfo(variableInfo.formInfo)
+                        .values(variableInfo.formVariables)
+                        .outcome(variableInfo.formOutcome)
+                        .extractVariables();
 
                 finalVariableMap.putAll(variablesFromFormSubmission);
             }
@@ -122,6 +135,9 @@ public class CaseTaskActivityBehavior extends ChildTaskActivityBehavior implemen
 
         caseInstanceBuilder.businessKey(getBusinessKey(cmmnEngineConfiguration, planItemInstanceEntity, caseTask));
         caseInstanceBuilder.variables(finalVariableMap);
+        if (!transientVariablesMap.isEmpty()) {
+            caseInstanceBuilder.transientVariables(transientVariablesMap);
+        }
 
         if (sameDeployment) {
             caseInstanceBuilder.caseDefinitionParentDeploymentId(
@@ -255,14 +271,18 @@ public class CaseTaskActivityBehavior extends ChildTaskActivityBehavior implemen
     }
 
     protected void handleOutParameters(DelegatePlanItemInstance planItemInstance, CmmnEngineConfiguration cmmnEngineConfiguration) {
-        if (outParameters == null) {
-            return;
-        }
-
         CaseInstanceEntityManager caseInstanceEntityManager = cmmnEngineConfiguration.getCaseInstanceEntityManager();
         CaseInstanceEntity referenceCase = caseInstanceEntityManager.findById(planItemInstance.getReferenceId());
 
-        IOParameterUtil.processOutParameters(outParameters, referenceCase, planItemInstance, cmmnEngineConfiguration.getExpressionManager());
+        if (outParameters != null) {
+            IOParameterUtil.processOutParameters(outParameters, referenceCase, planItemInstance, cmmnEngineConfiguration.getExpressionManager());
+        }
+
+        // A child case that completed was handed to the interceptor by ChildCaseInstanceStateChangeCallback already
+        CmmnChildInstanceParametersInterceptor childInstanceParametersInterceptor = cmmnEngineConfiguration.getChildInstanceParametersInterceptor();
+        if (childInstanceParametersInterceptor != null && referenceCase != null && !CaseInstanceState.COMPLETED.equals(referenceCase.getState())) {
+            childInstanceParametersInterceptor.afterOutParameters(new ChildInstanceOutParametersContext(planItemInstance, caseTask, referenceCase));
+        }
     }
 
 
